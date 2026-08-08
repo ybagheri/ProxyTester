@@ -1,17 +1,18 @@
 name: Build TDLib + APK (arm64-v8a)
 
-# Runs the whole pipeline that this sandbox can't run locally:
-#   1. Build TDLib from source for Android via their official Docker setup.
-#   2. Drop the output into the :tdlib module.
-#   3. Assemble a debug APK containing only the arm64-v8a native slice.
+# This workflow:
+# 1. Builds TDLib from source for Android using TDLib's official Docker setup.
+# 2. Caches the TDLib build so it does NOT need to be rebuilt on every run
+#    (only rebuilds if TDLib's upstream commit changes).
+# 3. Downloads the cached/current TDLib output.
+# 4. Wires TDLib into the :tdlib module.
+# 5. Builds a debug APK containing only arm64-v8a native libraries.
 #
-# Requires two repo secrets before running (Settings -> Secrets and
-# variables -> Actions):
-#   TELEGRAM_API_ID    (number, from https://my.telegram.org)
-#   TELEGRAM_API_HASH  (string, from https://my.telegram.org)
+# Required repository secrets:
+#   TELEGRAM_API_ID
+#   TELEGRAM_API_HASH
 #
-# Trigger manually from the Actions tab ("Run workflow"), or it runs on
-# every push to main.
+# Can be started manually from Actions, and also runs on every push to main.
 
 on:
   workflow_dispatch:
@@ -19,27 +20,51 @@ on:
     branches: [ main ]
 
 jobs:
+
+  # ============================================================
+  # JOB 1: Build / restore TDLib
+  # ============================================================
   build-tdlib:
     runs-on: ubuntu-latest
     steps:
-      - name: Free up disk space (TDLib's build is large)
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk 2>/dev/null || true
-          docker system prune -af || true
-
       - name: Checkout TDLib source
+        id: tdlib
         uses: actions/checkout@v4
         with:
           repository: tdlib/td
           path: td
+          fetch-depth: 1
+
+      # Cache key includes the TDLib commit SHA, so:
+      #   - same TDLib commit as a previous run -> cache HIT -> skip Docker build
+      #   - TDLib has a new commit                -> cache MISS -> rebuild
+      - name: Restore TDLib build cache
+        id: tdlib-cache
+        uses: actions/cache@v4
+        with:
+          path: td/example/android/tdlib
+          key: tdlib-android-${{ steps.tdlib.outputs.commit }}-v1
+
+      - name: Free up disk space
+        if: steps.tdlib-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk 2>/dev/null || true
+          docker system prune -af || true
 
       - name: Build TDLib for Android via Docker
-        # This is TDLib's own documented approach (see
-        # td/example/android/README.md). It cross-compiles for all ABIs;
-        # we only keep arm64-v8a downstream.
+        if: steps.tdlib-cache.outputs.cache-hit != 'true'
         working-directory: td/example/android
         run: docker build --output tdlib .
 
+      - name: Inspect TDLib build output
+        run: |
+          echo "TDLib cache hit: ${{ steps.tdlib-cache.outputs.cache-hit }}"
+          echo "--- TDLib output ---"
+          find td/example/android/tdlib -maxdepth 4 -type f | sort | head -200
+
+      # Uploaded on every run (cache hit or not) so build-apk always has
+      # something to download regardless of whether Docker actually ran.
       - name: Upload TDLib build output
         uses: actions/upload-artifact@v4
         with:
@@ -47,6 +72,9 @@ jobs:
           path: td/example/android/tdlib
           retention-days: 7
 
+  # ============================================================
+  # JOB 2: Build APK
+  # ============================================================
   build-apk:
     needs: build-tdlib
     runs-on: ubuntu-latest
@@ -60,13 +88,16 @@ jobs:
           name: tdlib-android-output
           path: tdlib-output
 
-      - name: Inspect TDLib output layout (debug aid)
-        run: find tdlib-output -maxdepth 4 -type d
+      - name: Inspect TDLib output layout
+        run: |
+          echo "--- Downloaded TDLib output ---"
+          find tdlib-output -maxdepth 5 -type f | sort | head -200
 
       - name: Wire TDLib into the :tdlib module
         run: |
           set -e
-          mkdir -p tdlib/src/main/java/org/drinkless/tdlib tdlib/src/main/jniLibs/arm64-v8a
+          mkdir -p tdlib/src/main/java/org/drinkless/tdlib
+          mkdir -p tdlib/src/main/jniLibs/arm64-v8a
 
           echo "--- Unzipping TDLib output ---"
           # The Docker --output step only produces tdlib.zip / tdlib-debug.zip,
@@ -77,42 +108,41 @@ jobs:
             unzip -q tdlib-output/tdlib-debug.zip -d tdlib-output/extracted
           else
             echo "::error::Neither tdlib.zip nor tdlib-debug.zip found"
-            find tdlib-output -maxdepth 3
+            find tdlib-output -maxdepth 8 -print
             exit 1
           fi
 
           echo "--- Contents after unzip ---"
-          find tdlib-output/extracted -maxdepth 5 | head -50
+          find tdlib-output/extracted -maxdepth 6 -print | head -200
 
-          echo "--- Locating TDLib Java sources (org/drinkless/tdlib/*.java) ---"
+          echo "--- Locating TDLib Java sources ---"
           JAVA_SRC_DIR=$(find tdlib-output/extracted -type d -path "*org/drinkless/tdlib" | head -n1)
           if [ -z "$JAVA_SRC_DIR" ]; then
-            echo "::error::Could not find an org/drinkless/tdlib directory anywhere in the TDLib build output."
-            echo "Full output tree for debugging:"
-            find tdlib-output -maxdepth 8
+            echo "::error::Could not find org/drinkless/tdlib directory"
+            find tdlib-output/extracted -maxdepth 10 -print
             exit 1
           fi
-          echo "Found Java sources at: $JAVA_SRC_DIR"
+          echo "Found: $JAVA_SRC_DIR"
           cp "$JAVA_SRC_DIR"/*.java tdlib/src/main/java/org/drinkless/tdlib/
 
           echo "--- Locating arm64-v8a libtdjni.so ---"
           SO_FILE=$(find tdlib-output/extracted -type f -name "libtdjni.so" -path "*arm64-v8a*" | head -n1)
           if [ -z "$SO_FILE" ]; then
-            echo "::error::Could not find an arm64-v8a libtdjni.so anywhere in the TDLib build output."
-            echo "All .so files found:"
-            find tdlib-output/extracted -name "*.so"
+            echo "::error::Could not find arm64-v8a libtdjni.so"
+            find tdlib-output/extracted -name "*.so" -print
             exit 1
           fi
           echo "Found: $SO_FILE"
           cp "$SO_FILE" tdlib/src/main/jniLibs/arm64-v8a/
 
-          echo "--- Resulting :tdlib module contents ---"
+          echo "--- Resulting :tdlib module ---"
           find tdlib/src/main -type f | sort
 
-          echo "--- Sanity check: required classes present? ---"
-          test -f tdlib/src/main/java/org/drinkless/tdlib/Client.java || { echo "::error::Client.java missing after copy"; exit 1; }
-          test -f tdlib/src/main/java/org/drinkless/tdlib/TdApi.java || { echo "::error::TdApi.java missing after copy"; exit 1; }
-          echo "OK — Client.java and TdApi.java are present."
+          echo "--- Sanity check ---"
+          test -f tdlib/src/main/java/org/drinkless/tdlib/Client.java
+          test -f tdlib/src/main/java/org/drinkless/tdlib/TdApi.java
+          test -f tdlib/src/main/jniLibs/arm64-v8a/libtdjni.so
+          echo "TDLib Java sources and arm64-v8a native library are OK."
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -145,3 +175,4 @@ jobs:
         with:
           name: ProxyTester-arm64-v8a-debug
           path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7

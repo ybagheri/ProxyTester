@@ -75,7 +75,19 @@ class TdLibManager(private val cacheDir: File) {
         ) { }
 
         client.send(
-            TdApi.AddProxy(proxyServer, proxyPort, true, TdApi.ProxyTypeMtproto(proxySecret))
+            // Field-based init instead of a positional constructor: TDLib's
+            // generated AddProxy constructor signature has changed between
+            // versions (some expose AddProxy(server, port, enable, type),
+            // others only a no-arg constructor + settable fields). Setting
+            // fields by name is stable across those variations as long as
+            // the TL schema field names themselves (server/port/enable/type)
+            // stay the same, which they have for years.
+            TdApi.AddProxy().apply {
+                server = proxyServer
+                port = proxyPort
+                enable = true
+                type = TdApi.ProxyTypeMtproto(proxySecret)
+            }
         ) { }
 
         val result = withTimeoutOrNull(timeoutMs) { readyDeferred.await() }

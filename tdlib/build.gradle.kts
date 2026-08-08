@@ -20,5 +20,5 @@ android {
 }
 
 dependencies {
-    implementation("androidx.annotation:annotation:1.8.2")
+    // TDLib's generated Java wrapper has no external deps beyond the JDK.
 }
