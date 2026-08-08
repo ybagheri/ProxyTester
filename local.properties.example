@@ -1,0 +1,18 @@
+# Copy this file to local.properties (which is gitignored, do NOT commit
+# the real one) and fill in your own values.
+#
+# Get these from https://my.telegram.org -> log in with your phone number
+# -> "API development tools" -> create an app (any name/platform is fine,
+# e.g. name "ProxyTesterProbe", platform "Android") -> it gives you
+# api_id and api_hash immediately.
+#
+# These identify the APPLICATION to Telegram's API, not a user account —
+# but still don't publish them in a public repo or screenshot; treat them
+# like any other API credential.
+
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=put_your_api_hash_here
+
+# Also required by the Android Gradle Plugin itself if not already set
+# via ANDROID_HOME env var:
+# sdk.dir=/path/to/Android/Sdk

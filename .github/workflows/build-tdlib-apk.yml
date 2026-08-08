@@ -1,0 +1,115 @@
+name: Build TDLib + APK (arm64-v8a)
+
+# Runs the whole pipeline that this sandbox can't run locally:
+#   1. Build TDLib from source for Android via their official Docker setup.
+#   2. Drop the output into the :tdlib module.
+#   3. Assemble a debug APK containing only the arm64-v8a native slice.
+#
+# Requires two repo secrets before running (Settings -> Secrets and
+# variables -> Actions):
+#   TELEGRAM_API_ID    (number, from https://my.telegram.org)
+#   TELEGRAM_API_HASH  (string, from https://my.telegram.org)
+#
+# Trigger manually from the Actions tab ("Run workflow"), or it runs on
+# every push to main.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-tdlib:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free up disk space (TDLib's build is large)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk 2>/dev/null || true
+          docker system prune -af || true
+
+      - name: Checkout TDLib source
+        uses: actions/checkout@v4
+        with:
+          repository: tdlib/td
+          path: td
+
+      - name: Build TDLib for Android via Docker
+        # This is TDLib's own documented approach (see
+        # td/example/android/README.md). It cross-compiles for all ABIs;
+        # we only keep arm64-v8a downstream.
+        working-directory: td/example/android
+        run: docker build --output tdlib .
+
+      - name: Upload TDLib build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdlib-android-output
+          path: td/example/android/tdlib
+          retention-days: 7
+
+  build-apk:
+    needs: build-tdlib
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this project
+        uses: actions/checkout@v4
+
+      - name: Download TDLib build output
+        uses: actions/download-artifact@v4
+        with:
+          name: tdlib-android-output
+          path: tdlib-output
+
+      - name: Inspect TDLib output layout (debug aid)
+        run: find tdlib-output -maxdepth 4 -type d
+
+      - name: Wire TDLib into the :tdlib module
+        run: |
+          mkdir -p tdlib/src/main/java tdlib/src/main/jniLibs
+          # TDLib's Docker output layout has moved before; if this step
+          # fails, check the "Inspect TDLib output layout" step above and
+          # adjust these paths to match.
+          find tdlib-output -name "*.jar" -o -name "*.java" | while read -r f; do :; done
+          cp -r tdlib-output/java/* tdlib/src/main/java/ 2>/dev/null || \
+            cp -r tdlib-output/*/java/* tdlib/src/main/java/ 2>/dev/null || true
+          cp -r tdlib-output/libs/* tdlib/src/main/jniLibs/ 2>/dev/null || \
+            cp -r tdlib-output/*/libs/* tdlib/src/main/jniLibs/ 2>/dev/null || true
+          # We only want arm64-v8a in the final APK; drop the rest to
+          # save time/space (the ndk.abiFilters in build.gradle.kts also
+          # enforces this at package time).
+          find tdlib/src/main/jniLibs -mindepth 1 -maxdepth 1 -type d \
+            ! -name "arm64-v8a" -exec rm -rf {} + 2>/dev/null || true
+          echo "--- Resulting :tdlib module contents ---"
+          find tdlib/src/main -type f | sort
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required SDK packages
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Write local.properties from secrets
+        run: |
+          echo "TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}" >> local.properties
+          echo "TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}" >> local.properties
+          echo "sdk.dir=$ANDROID_HOME" >> local.properties
+
+      - name: Build debug APK (arm64-v8a only)
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProxyTester-arm64-v8a-debug
+          path: app/build/outputs/apk/debug/*.apk
