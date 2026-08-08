@@ -68,8 +68,24 @@ jobs:
           set -e
           mkdir -p tdlib/src/main/java/org/drinkless/tdlib tdlib/src/main/jniLibs/arm64-v8a
 
+          echo "--- Unzipping TDLib output ---"
+          # The Docker --output step only produces tdlib.zip / tdlib-debug.zip,
+          # not extracted folders — has to be unzipped first.
+          if [ -f tdlib-output/tdlib.zip ]; then
+            unzip -q tdlib-output/tdlib.zip -d tdlib-output/extracted
+          elif [ -f tdlib-output/tdlib-debug.zip ]; then
+            unzip -q tdlib-output/tdlib-debug.zip -d tdlib-output/extracted
+          else
+            echo "::error::Neither tdlib.zip nor tdlib-debug.zip found"
+            find tdlib-output -maxdepth 3
+            exit 1
+          fi
+
+          echo "--- Contents after unzip ---"
+          find tdlib-output/extracted -maxdepth 5 | head -50
+
           echo "--- Locating TDLib Java sources (org/drinkless/tdlib/*.java) ---"
-          JAVA_SRC_DIR=$(find tdlib-output -type d -path "*org/drinkless/tdlib" | head -n1)
+          JAVA_SRC_DIR=$(find tdlib-output/extracted -type d -path "*org/drinkless/tdlib" | head -n1)
           if [ -z "$JAVA_SRC_DIR" ]; then
             echo "::error::Could not find an org/drinkless/tdlib directory anywhere in the TDLib build output."
             echo "Full output tree for debugging:"
@@ -80,11 +96,11 @@ jobs:
           cp "$JAVA_SRC_DIR"/*.java tdlib/src/main/java/org/drinkless/tdlib/
 
           echo "--- Locating arm64-v8a libtdjni.so ---"
-          SO_FILE=$(find tdlib-output -type f -name "libtdjni.so" -path "*arm64-v8a*" | head -n1)
+          SO_FILE=$(find tdlib-output/extracted -type f -name "libtdjni.so" -path "*arm64-v8a*" | head -n1)
           if [ -z "$SO_FILE" ]; then
             echo "::error::Could not find an arm64-v8a libtdjni.so anywhere in the TDLib build output."
             echo "All .so files found:"
-            find tdlib-output -name "*.so"
+            find tdlib-output/extracted -name "*.so"
             exit 1
           fi
           echo "Found: $SO_FILE"
