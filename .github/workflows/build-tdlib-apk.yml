@@ -65,22 +65,38 @@ jobs:
 
       - name: Wire TDLib into the :tdlib module
         run: |
-          mkdir -p tdlib/src/main/java tdlib/src/main/jniLibs
-          # TDLib's Docker output layout has moved before; if this step
-          # fails, check the "Inspect TDLib output layout" step above and
-          # adjust these paths to match.
-          find tdlib-output -name "*.jar" -o -name "*.java" | while read -r f; do :; done
-          cp -r tdlib-output/java/* tdlib/src/main/java/ 2>/dev/null || \
-            cp -r tdlib-output/*/java/* tdlib/src/main/java/ 2>/dev/null || true
-          cp -r tdlib-output/libs/* tdlib/src/main/jniLibs/ 2>/dev/null || \
-            cp -r tdlib-output/*/libs/* tdlib/src/main/jniLibs/ 2>/dev/null || true
-          # We only want arm64-v8a in the final APK; drop the rest to
-          # save time/space (the ndk.abiFilters in build.gradle.kts also
-          # enforces this at package time).
-          find tdlib/src/main/jniLibs -mindepth 1 -maxdepth 1 -type d \
-            ! -name "arm64-v8a" -exec rm -rf {} + 2>/dev/null || true
+          set -e
+          mkdir -p tdlib/src/main/java/org/drinkless/tdlib tdlib/src/main/jniLibs/arm64-v8a
+
+          echo "--- Locating TDLib Java sources (org/drinkless/tdlib/*.java) ---"
+          JAVA_SRC_DIR=$(find tdlib-output -type d -path "*org/drinkless/tdlib" | head -n1)
+          if [ -z "$JAVA_SRC_DIR" ]; then
+            echo "::error::Could not find an org/drinkless/tdlib directory anywhere in the TDLib build output."
+            echo "Full output tree for debugging:"
+            find tdlib-output -maxdepth 8
+            exit 1
+          fi
+          echo "Found Java sources at: $JAVA_SRC_DIR"
+          cp "$JAVA_SRC_DIR"/*.java tdlib/src/main/java/org/drinkless/tdlib/
+
+          echo "--- Locating arm64-v8a libtdjni.so ---"
+          SO_FILE=$(find tdlib-output -type f -name "libtdjni.so" -path "*arm64-v8a*" | head -n1)
+          if [ -z "$SO_FILE" ]; then
+            echo "::error::Could not find an arm64-v8a libtdjni.so anywhere in the TDLib build output."
+            echo "All .so files found:"
+            find tdlib-output -name "*.so"
+            exit 1
+          fi
+          echo "Found: $SO_FILE"
+          cp "$SO_FILE" tdlib/src/main/jniLibs/arm64-v8a/
+
           echo "--- Resulting :tdlib module contents ---"
           find tdlib/src/main -type f | sort
+
+          echo "--- Sanity check: required classes present? ---"
+          test -f tdlib/src/main/java/org/drinkless/tdlib/Client.java || { echo "::error::Client.java missing after copy"; exit 1; }
+          test -f tdlib/src/main/java/org/drinkless/tdlib/TdApi.java || { echo "::error::TdApi.java missing after copy"; exit 1; }
+          echo "OK — Client.java and TdApi.java are present."
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
