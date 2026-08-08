@@ -75,18 +75,20 @@ class TdLibManager(private val cacheDir: File) {
         ) { }
 
         client.send(
-            // Field-based init instead of a positional constructor: TDLib's
-            // generated AddProxy constructor signature has changed between
-            // versions (some expose AddProxy(server, port, enable, type),
-            // others only a no-arg constructor + settable fields). Setting
-            // fields by name is stable across those variations as long as
-            // the TL schema field names themselves (server/port/enable/type)
-            // stay the same, which they have for years.
+            // TDLib's current (master) schema wraps server/port/type inside
+            // a nested TdApi.Proxy object, and AddProxy itself only takes
+            // that proxy + an enable flag — confirmed against TDLib's own
+            // addProxy JSON shape: {"enable":true,"proxy":{"server":...,
+            // "port":...,"type":{...}}}. Using field-based init (not a
+            // positional constructor) so this keeps compiling even if a
+            // future TDLib version adds/reorders fields again.
             TdApi.AddProxy().apply {
-                server = proxyServer
-                port = proxyPort
+                proxy = TdApi.Proxy().apply {
+                    server = proxyServer
+                    port = proxyPort
+                    type = TdApi.ProxyTypeMtproto(proxySecret)
+                }
                 enable = true
-                type = TdApi.ProxyTypeMtproto(proxySecret)
             }
         ) { }
 
