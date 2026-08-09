@@ -220,22 +220,40 @@ class TelegramSession(private val filesDir: File) {
             if (messages.isEmpty()) break
 
             for (message in messages) {
-                val content = message.content
-                if (content is TdApi.MessageText) {
-                    val formatted = content.text
-                    // Plain visible text — covers proxy links typed out
-                    // as-is in the message.
-                    texts.add(formatted.text)
+                // Covers a plain text message OR a media message (photo/
+                // video/animation/document/audio) with a caption — bots
+                // often post proxy links as an image+caption rather than
+                // plain text, which the previous version completely
+                // missed since it only checked MessageText.
+                val formattedText = captionOrTextOf(message.content)
+                if (formattedText != null) {
+                    texts.add(formattedText.text)
 
-                    // Some channels post a link with different anchor
-                    // text than the real URL (e.g. a shortened/preview
-                    // form without the secret param, while the actual
-                    // href has it) — that real URL only lives in the
-                    // message's text entities, not in the plain text.
-                    formatted.entities?.forEach { entity ->
+                    // A link can be displayed with different anchor text
+                    // than its real URL (e.g. a shortened preview without
+                    // the secret param, while the actual href has it) —
+                    // that real URL only lives in the text entity, not
+                    // the plain text.
+                    formattedText.entities?.forEach { entity ->
                         val entityType = entity.type
                         if (entityType is TdApi.TextEntityTypeTextUrl) {
                             texts.add(entityType.url)
+                        }
+                    }
+                }
+
+                // The full link (with secret) can also live ONLY in an
+                // inline button under the message — very common for bots
+                // like this one — rather than anywhere in the message
+                // text/caption at all.
+                val replyMarkup = message.replyMarkup
+                if (replyMarkup is TdApi.ReplyMarkupInlineKeyboard) {
+                    replyMarkup.rows?.forEach { row ->
+                        row?.forEach { button ->
+                            val buttonType = button.type
+                            if (buttonType is TdApi.InlineKeyboardButtonTypeUrl) {
+                                texts.add(buttonType.url)
+                            }
                         }
                     }
                 }
@@ -275,5 +293,16 @@ class TelegramSession(private val filesDir: File) {
             throw RuntimeException("TDLib error ${result.code}: ${result.message}")
         }
         return result
+    }
+
+    /** Returns the text/caption of any message content type that has one, else null. */
+    private fun captionOrTextOf(content: TdApi.MessageContent): TdApi.FormattedText? = when (content) {
+        is TdApi.MessageText -> content.text
+        is TdApi.MessagePhoto -> content.caption
+        is TdApi.MessageVideo -> content.caption
+        is TdApi.MessageAnimation -> content.caption
+        is TdApi.MessageDocument -> content.caption
+        is TdApi.MessageAudio -> content.caption
+        else -> null
     }
 }
