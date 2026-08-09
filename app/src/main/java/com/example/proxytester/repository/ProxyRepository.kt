@@ -18,7 +18,12 @@ import java.io.File
 class ProxyRepository(
     /** Pass context.cacheDir here — TDLib needs a writable scratch directory per probe. */
     cacheDir: File,
-    private val maxConcurrent: Int = 20
+    // SOCKS5 checks are plain sockets — cheap, fine at high concurrency.
+    private val maxConcurrentSocks5: Int = 20,
+    // Each MTProto check spins up a full TDLib client (its own thread,
+    // JNI, network stack). Running 20 of those at once on a phone was
+    // very likely why every proxy timed out — keep this modest.
+    private val maxConcurrentMtproto: Int = 4
 ) {
     private val mtprotoChecker = MtprotoChecker(cacheDir)
     private val socks5Checker = Socks5Checker()
@@ -37,9 +42,11 @@ class ProxyRepository(
     }
 
     suspend fun testAll(proxies: List<Proxy>): List<ProxyResult> = coroutineScope {
-        val semaphore = Semaphore(maxConcurrent)
+        val socks5Semaphore = Semaphore(maxConcurrentSocks5)
+        val mtprotoSemaphore = Semaphore(maxConcurrentMtproto)
         proxies.map { proxy ->
             async {
+                val semaphore = if (proxy.type == ProxyType.MTPROTO) mtprotoSemaphore else socks5Semaphore
                 semaphore.withPermit { testOne(proxy) }
             }
         }.map { it.await() }
