@@ -21,8 +21,17 @@ android {
         applicationId = "com.example.proxytester"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.2-mtproto-wip"
+
+        // Auto-increments on every CI build (GITHUB_RUN_NUMBER is set
+        // automatically by Actions for every job). This is what lets a
+        // freshly-built APK be installed as an UPDATE over whatever's
+        // already on the phone instead of Android rejecting it as a
+        // same-or-lower version — a plain "1" here forever was the other
+        // half of why every build needed a clean reinstall (the other
+        // half being the signing key changing every run — see
+        // signingConfigs below).
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = "0.3-" + (System.getenv("GITHUB_RUN_NUMBER") ?: "dev")
 
         // Only build/package the arm64-v8a native slice, per request —
         // smaller APK, single architecture. Remove this block (or add
@@ -43,10 +52,39 @@ android {
         )
     }
 
+    // A stable signing identity, reused across every CI build (see
+    // docs/apk-updates-and-signing.md for how the keystore gets there).
+    // Without this, Gradle's default debug keystore is regenerated fresh
+    // on every CI run, so every APK has a different signature and Android
+    // refuses to treat it as an "update" — it demands an uninstall first,
+    // which wipes the app's data (including your logged-in Telegram
+    // session). Only applied when the keystore is actually present, so
+    // local builds without it still fall back to the normal ephemeral
+    // debug key.
+    val hasCiKeystore = localProps.getProperty("KEYSTORE_PATH") != null
+    signingConfigs {
+        if (hasCiKeystore) {
+            create("ci") {
+                storeFile = file(localProps.getProperty("KEYSTORE_PATH"))
+                storePassword = localProps.getProperty("KEYSTORE_PASSWORD")
+                keyAlias = localProps.getProperty("KEY_ALIAS")
+                keyPassword = localProps.getProperty("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasCiKeystore) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasCiKeystore) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
     }
 

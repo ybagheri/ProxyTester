@@ -222,7 +222,22 @@ class TelegramSession(private val filesDir: File) {
             for (message in messages) {
                 val content = message.content
                 if (content is TdApi.MessageText) {
-                    texts.add(content.text.text)
+                    val formatted = content.text
+                    // Plain visible text — covers proxy links typed out
+                    // as-is in the message.
+                    texts.add(formatted.text)
+
+                    // Some channels post a link with different anchor
+                    // text than the real URL (e.g. a shortened/preview
+                    // form without the secret param, while the actual
+                    // href has it) — that real URL only lives in the
+                    // message's text entities, not in the plain text.
+                    formatted.entities?.forEach { entity ->
+                        val entityType = entity.type
+                        if (entityType is TdApi.TextEntityTypeTextUrl) {
+                            texts.add(entityType.url)
+                        }
+                    }
                 }
             }
             nextFromMessageId = messages.last().id

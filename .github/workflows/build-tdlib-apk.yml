@@ -11,6 +11,10 @@ name: Build TDLib + APK (arm64-v8a)
 # Required repository secrets:
 #   TELEGRAM_API_ID
 #   TELEGRAM_API_HASH
+#   KEYSTORE_BASE64     (optional but recommended — see docs/apk-updates-and-signing.md;
+#   KEYSTORE_PASSWORD    without these, builds fall back to Gradle's default
+#   KEY_ALIAS             ephemeral debug key, and each build will need a
+#   KEY_PASSWORD           clean uninstall/reinstall instead of an update)
 #
 # Can be started manually from Actions, and also runs on every push to main.
 
@@ -166,6 +170,17 @@ jobs:
           echo "TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}" >> local.properties
           echo "TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}" >> local.properties
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
+
+      - name: Decode signing keystore (for update-compatible, consistently-signed builds)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/proxytester.keystore"
+          {
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/proxytester.keystore"
+            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}"
+            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}"
+            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}"
+          } >> local.properties
 
       - name: Build debug APK (arm64-v8a only)
         run: gradle assembleDebug --no-daemon
