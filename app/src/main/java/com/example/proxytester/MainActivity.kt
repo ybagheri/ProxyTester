@@ -9,7 +9,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.example.proxytester.model.ProxyResult
 import com.example.proxytester.model.ProxyType
@@ -121,6 +125,7 @@ fun ProxyTesterScreen(repository: ProxyRepository) {
         }
 
         result?.let { r ->
+            val clipboard = LocalClipboardManager.current
             Divider()
             Text("Result", style = MaterialTheme.typography.titleMedium)
             Text("Type: ${r.proxy.type}")
@@ -129,6 +134,12 @@ fun ProxyTesterScreen(repository: ProxyRepository) {
             Text("Ping: ${r.pingMs} ms")
             Text("Status: ${if (r.success) "✅ WORKING" else "❌ FAILED (${r.reason})"}")
             Text(r.message, style = MaterialTheme.typography.bodySmall)
+            if (r.success) {
+                Button(
+                    onClick = { clipboard.setText(AnnotatedString(r.proxy.url)) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Copy proxy link") }
+            }
         }
     }
 }
@@ -144,6 +155,7 @@ fun ChannelScanScreen(
     val sessionError by telegramSession.lastError.collectAsState()
 
     var channel by remember { mutableStateOf(settingsStore.getChannel()) }
+    var messageLimitInput by remember { mutableStateOf("40") }
     var loginProxyInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
     var codeInput by remember { mutableStateOf("") }
@@ -179,6 +191,14 @@ fun ChannelScanScreen(
             },
             label = { Text("Channel username (no @)") },
             placeholder = { Text(SettingsStore.DEFAULT_CHANNEL) },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        OutlinedTextField(
+            value = messageLimitInput,
+            onValueChange = { messageLimitInput = it.filter { c -> c.isDigit() } },
+            label = { Text("How many recent posts to check") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -266,7 +286,8 @@ fun ChannelScanScreen(
                         isBusy = true
                         scope.launch {
                             try {
-                                summary = channelRepository.fetchAndTest(channel)
+                                val limit = messageLimitInput.toIntOrNull()?.coerceIn(1, 500) ?: 40
+                                summary = channelRepository.fetchAndTest(channel, limit)
                             } catch (e: Exception) {
                                 errorText = e.message ?: "Unknown error"
                             } finally {
@@ -292,6 +313,7 @@ fun ChannelScanScreen(
         sessionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         summary?.let { s ->
+            val clipboard = LocalClipboardManager.current
             Divider()
             Text("Total: ${s.total}   Working: ${s.workingCount}   Failed: ${s.failedCount}")
             Text(
@@ -308,8 +330,26 @@ fun ChannelScanScreen(
             if (s.workingCount > 0) {
                 Text("Working", style = MaterialTheme.typography.titleSmall)
                 s.results.filter { it.success }.forEach { r ->
-                    Text("✅ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port}  (${r.pingMs} ms)")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "✅ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port}  (${r.pingMs} ms)",
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(r.proxy.url)) }) {
+                            Text("Copy")
+                        }
+                    }
                 }
+                Button(
+                    onClick = {
+                        val lines = s.results.filter { it.success }.joinToString("\n") { it.proxy.url }
+                        clipboard.setText(AnnotatedString(lines))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Copy all working links") }
             }
 
             if (s.failedCount > 0) {
