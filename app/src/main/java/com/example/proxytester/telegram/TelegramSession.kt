@@ -1,6 +1,8 @@
 package com.example.proxytester.telegram
 
 import com.example.proxytester.BuildConfig
+import com.example.proxytester.model.Proxy
+import com.example.proxytester.model.ProxyType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,13 @@ class TelegramSession(private val filesDir: File) {
 
     private val _authState = MutableStateFlow<TelegramAuthState>(TelegramAuthState.Connecting)
     val authState: StateFlow<TelegramAuthState> = _authState
+
+    // Surfaces TDLib errors from login steps (wrong code, banned number,
+    // etc.) that previously went into an empty {} result handler and
+    // silently vanished. UI observes this separately from authState so an
+    // error doesn't get overwritten by the next state transition.
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError
 
     private val dbDir: File by lazy { File(filesDir, "tdlib-session").apply { mkdirs() } }
 
@@ -86,22 +95,94 @@ class TelegramSession(private val filesDir: File) {
         }
     }
 
+    /**
+     * Routes this session's connection (including the login handshake
+     * itself) through [proxy]. Call this BEFORE submitting a phone number
+     * if Telegram isn't directly reachable — which, for this app's whole
+     * reason to exist (testing from inside Iran), is the common case. The
+     * previous version had no equivalent of this at all: login always
+     * went straight to Telegram with no proxy, same as the real thing
+     * MtprotoChecker exists to test.
+     */
+    fun configureProxy(proxy: Proxy) {
+        _lastError.value = null
+        val c = client
+        if (c == null) {
+            _lastError.value = "Session not started yet — try again in a moment."
+            return
+        }
+
+        val proxyType: TdApi.ProxyType = when (proxy.type) {
+            ProxyType.SOCKS5 -> TdApi.ProxyTypeSocks5()
+            ProxyType.MTPROTO -> TdApi.ProxyTypeMtproto(proxy.secret ?: "")
+            ProxyType.UNKNOWN -> {
+                _lastError.value = "Unrecognized proxy type for login"
+                return
+            }
+        }
+
+        c.send(
+            TdApi.AddProxy().apply {
+                this.proxy = TdApi.Proxy().apply {
+                    server = proxy.server
+                    port = proxy.port
+                    type = proxyType
+                }
+                enable = true
+            }
+        ) { result ->
+            if (result is TdApi.Error) {
+                _lastError.value = "Failed to set login proxy: ${result.message}"
+            }
+        }
+    }
+
     fun submitPhoneNumber(phoneNumberInput: String) {
-        client?.send(
+        _lastError.value = null
+        val c = client
+        if (c == null) {
+            _lastError.value = "Session not started yet — try again in a moment."
+            return
+        }
+        c.send(
             TdApi.SetAuthenticationPhoneNumber().apply { phoneNumber = phoneNumberInput }
-        ) { }
+        ) { result ->
+            if (result is TdApi.Error) {
+                _lastError.value = "Telegram rejected the phone number: ${result.message}"
+            }
+        }
     }
 
     fun submitCode(codeInput: String) {
-        client?.send(
+        _lastError.value = null
+        val c = client
+        if (c == null) {
+            _lastError.value = "Session not started yet — try again in a moment."
+            return
+        }
+        c.send(
             TdApi.CheckAuthenticationCode().apply { code = codeInput }
-        ) { }
+        ) { result ->
+            if (result is TdApi.Error) {
+                _lastError.value = "Telegram rejected the code: ${result.message}"
+            }
+        }
     }
 
     fun submitPassword(passwordInput: String) {
-        client?.send(
+        _lastError.value = null
+        val c = client
+        if (c == null) {
+            _lastError.value = "Session not started yet — try again in a moment."
+            return
+        }
+        c.send(
             TdApi.CheckAuthenticationPassword().apply { password = passwordInput }
-        ) { }
+        ) { result ->
+            if (result is TdApi.Error) {
+                _lastError.value = "Telegram rejected the password: ${result.message}"
+            }
+        }
     }
 
     /**

@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.proxytester.model.ProxyResult
+import com.example.proxytester.parser.ProxyParser
 import com.example.proxytester.repository.ChannelProxyRepository
 import com.example.proxytester.repository.ChannelTestSummary
 import com.example.proxytester.repository.ProxyRepository
@@ -139,8 +140,10 @@ fun ChannelScanScreen(
 ) {
     val scope = rememberCoroutineScope()
     val authState by telegramSession.authState.collectAsState()
+    val sessionError by telegramSession.lastError.collectAsState()
 
     var channel by remember { mutableStateOf(settingsStore.getChannel()) }
+    var loginProxyInput by remember { mutableStateOf("") }
     var phoneInput by remember { mutableStateOf("") }
     var codeInput by remember { mutableStateOf("") }
     var passwordInput by remember { mutableStateOf("") }
@@ -177,6 +180,34 @@ fun ChannelScanScreen(
             placeholder = { Text(SettingsStore.DEFAULT_CHANNEL) },
             modifier = Modifier.fillMaxWidth()
         )
+
+        Divider()
+
+        Text(
+            "If Telegram isn't directly reachable, set a proxy for the " +
+                "login connection itself first (paste a link you already " +
+                "know works, e.g. from the Single Proxy tab).",
+            style = MaterialTheme.typography.bodySmall
+        )
+        OutlinedTextField(
+            value = loginProxyInput,
+            onValueChange = { loginProxyInput = it },
+            label = { Text("Proxy for login (optional, tg:// or socks5://)") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = {
+                val parsed = ProxyParser.parse(loginProxyInput)
+                if (parsed == null) {
+                    sendStatus = "Could not parse that proxy link."
+                } else {
+                    telegramSession.configureProxy(parsed)
+                    sendStatus = "Proxy applied for login."
+                }
+            },
+            enabled = loginProxyInput.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Apply proxy") }
 
         Divider()
 
@@ -257,6 +288,7 @@ fun ChannelScanScreen(
         }
 
         errorText?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        sessionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
         summary?.let { s ->
             Divider()
