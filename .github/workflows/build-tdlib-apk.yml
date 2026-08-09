@@ -82,6 +82,11 @@ jobs:
   build-apk:
     needs: build-tdlib
     runs-on: ubuntu-latest
+    env:
+      # "secrets" isn't allowed directly inside an "if:" expression (a
+      # GitHub Actions restriction, not a typo) — routing it through env
+      # first is the standard workaround.
+      HAS_KEYSTORE_SECRET: ${{ secrets.KEYSTORE_BASE64 }}
     steps:
       - name: Checkout this project
         uses: actions/checkout@v4
@@ -172,7 +177,7 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" >> local.properties
 
       - name: Decode signing keystore (for update-compatible, consistently-signed builds)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: ${{ env.HAS_KEYSTORE_SECRET != '' }}
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/proxytester.keystore"
           {
