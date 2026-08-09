@@ -2,6 +2,7 @@ package com.example.proxytester.repository
 
 import com.example.proxytester.model.Proxy
 import com.example.proxytester.model.ProxyResult
+import com.example.proxytester.model.ProxyType
 import com.example.proxytester.parser.ProxyParser
 import com.example.proxytester.telegram.TelegramSession
 
@@ -11,6 +12,12 @@ data class ChannelTestSummary(
 ) {
     val workingCount: Int get() = results.count { it.success }
     val failedCount: Int get() = results.count { !it.success }
+
+    val totalByType: Map<ProxyType, Int> get() = results.groupingBy { it.proxy.type }.eachCount()
+    val workingByType: Map<ProxyType, Int> get() =
+        results.filter { it.success }.groupingBy { it.proxy.type }.eachCount()
+    val failedByType: Map<ProxyType, Int> get() =
+        results.filter { !it.success }.groupingBy { it.proxy.type }.eachCount()
 }
 
 /**

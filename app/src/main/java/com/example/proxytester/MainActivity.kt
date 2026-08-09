@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.proxytester.model.ProxyResult
+import com.example.proxytester.model.ProxyType
 import com.example.proxytester.parser.ProxyParser
 import com.example.proxytester.repository.ChannelProxyRepository
 import com.example.proxytester.repository.ChannelTestSummary
@@ -293,9 +294,32 @@ fun ChannelScanScreen(
         summary?.let { s ->
             Divider()
             Text("Total: ${s.total}   Working: ${s.workingCount}   Failed: ${s.failedCount}")
+            Text(
+                "MTProto — total ${s.totalByType[ProxyType.MTPROTO] ?: 0}, " +
+                    "working ${s.workingByType[ProxyType.MTPROTO] ?: 0}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "SOCKS5 — total ${s.totalByType[ProxyType.SOCKS5] ?: 0}, " +
+                    "working ${s.workingByType[ProxyType.SOCKS5] ?: 0}",
+                style = MaterialTheme.typography.bodySmall
+            )
 
-            s.results.filter { it.success }.forEach { r ->
-                Text("✅ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port}  (${r.pingMs} ms)")
+            if (s.workingCount > 0) {
+                Text("Working", style = MaterialTheme.typography.titleSmall)
+                s.results.filter { it.success }.forEach { r ->
+                    Text("✅ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port}  (${r.pingMs} ms)")
+                }
+            }
+
+            if (s.failedCount > 0) {
+                Text("Failed (why)", style = MaterialTheme.typography.titleSmall)
+                s.results.filter { !it.success }.forEach { r ->
+                    Text(
+                        "❌ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port} — ${r.reason}: ${r.message}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
 
             if (s.workingCount > 0) {

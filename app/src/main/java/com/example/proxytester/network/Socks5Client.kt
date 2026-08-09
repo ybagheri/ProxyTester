@@ -60,15 +60,25 @@ class Socks5Client(
             throw Socks5Exception("Proxy requires authentication we don't support")
         }
 
-        // CONNECT request, ATYP = domain name so we don't need to resolve DNS ourselves
-        val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
-        val request = ArrayList<Byte>(7 + hostBytes.size)
+        // CONNECT request. Use ATYP=IPv4 when the target is a literal IP
+        // address (e.g. a Telegram DC IP) instead of encoding it as a
+        // "domain name" — some SOCKS5 servers handle a numeric string in
+        // the domain field inconsistently, which was silently causing
+        // false negatives against real IP targets.
+        val ipv4Bytes = parseIpv4Literal(targetHost)
+        val request = ArrayList<Byte>(10)
         request.add(0x05)
         request.add(0x01) // CONNECT
         request.add(0x00) // reserved
-        request.add(0x03) // ATYP = domain
-        request.add(hostBytes.size.toByte())
-        request.addAll(hostBytes.toList())
+        if (ipv4Bytes != null) {
+            request.add(0x01) // ATYP = IPv4
+            request.addAll(ipv4Bytes.toList())
+        } else {
+            request.add(0x03) // ATYP = domain name
+            val hostBytes = targetHost.toByteArray(Charsets.US_ASCII)
+            request.add(hostBytes.size.toByte())
+            request.addAll(hostBytes.toList())
+        }
         request.add((targetPort shr 8 and 0xFF).toByte())
         request.add((targetPort and 0xFF).toByte())
         out.write(request.toByteArray())
@@ -102,5 +112,17 @@ class Socks5Client(
         }
 
         return socket
+    }
+
+    private fun parseIpv4Literal(host: String): ByteArray? {
+        val parts = host.split(".")
+        if (parts.size != 4) return null
+        val bytes = ByteArray(4)
+        for (i in 0 until 4) {
+            val value = parts[i].toIntOrNull() ?: return null
+            if (value !in 0..255) return null
+            bytes[i] = value.toByte()
+        }
+        return bytes
     }
 }
