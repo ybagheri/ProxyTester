@@ -36,6 +36,35 @@ object ProxyParser {
             .mapNotNull { parse(it) }
             .toList()
 
+    // Mirrors the Python scraper's MTPROTO_PATTERN / SOCKS_PATTERN: finds
+    // proxy links/addresses embedded anywhere inside a longer message,
+    // not just a proxy link on its own line.
+    private val MTPROTO_LINK_REGEX = Regex(
+        """(?:https?://t\.me/proxy|tg://proxy)\?[^\s<>"']+""",
+        RegexOption.IGNORE_CASE
+    )
+    private val SOCKS_ADDRESS_REGEX = Regex(
+        """(?:socks5?://)?(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** Scans free-form text (e.g. a channel message) for embedded proxy links. */
+    fun extractFromText(text: String): List<Proxy> {
+        val found = mutableListOf<Proxy>()
+
+        MTPROTO_LINK_REGEX.findAll(text).forEach { match ->
+            parse(match.value)?.let { found.add(it) }
+        }
+
+        SOCKS_ADDRESS_REGEX.findAll(text).forEach { match ->
+            val raw = match.value
+            val normalized = if (raw.contains("://")) raw else "socks5://$raw"
+            parse(normalized)?.let { found.add(it) }
+        }
+
+        return found
+    }
+
     private fun parseMtproto(line: String): Proxy? {
         val uri = URI(line)
         val query = uri.query ?: return null

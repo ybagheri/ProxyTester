@@ -9,9 +9,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.proxytester.model.ProxyResult
+import com.example.proxytester.repository.ChannelProxyRepository
+import com.example.proxytester.repository.ChannelTestSummary
 import com.example.proxytester.repository.ProxyRepository
+import com.example.proxytester.telegram.TelegramAuthState
+import com.example.proxytester.telegram.TelegramSession
+import com.example.proxytester.utils.SettingsStore
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -20,7 +26,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ProxyTesterScreen()
+                    AppRoot()
                 }
             }
         }
@@ -28,9 +34,37 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ProxyTesterScreen() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val repository = remember { ProxyRepository(cacheDir = context.cacheDir) }
+fun AppRoot() {
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+    val telegramSession = remember { TelegramSession(context.filesDir) }
+    val proxyRepository = remember { ProxyRepository(cacheDir = context.cacheDir) }
+    val channelRepository = remember { ChannelProxyRepository(telegramSession, proxyRepository) }
+
+    var selectedTab by remember { mutableStateOf(0) }
+
+    Column(Modifier.fillMaxSize()) {
+        TabRow(selectedTabIndex = selectedTab) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Single Proxy") }
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("Channel Scan") }
+            )
+        }
+        when (selectedTab) {
+            0 -> ProxyTesterScreen(proxyRepository)
+            1 -> ChannelScanScreen(telegramSession, channelRepository, settingsStore)
+        }
+    }
+}
+
+@Composable
+fun ProxyTesterScreen(repository: ProxyRepository) {
     val scope = rememberCoroutineScope()
 
     var input by remember { mutableStateOf("") }
@@ -94,5 +128,162 @@ fun ProxyTesterScreen() {
             Text("Status: ${if (r.success) "✅ WORKING" else "❌ FAILED (${r.reason})"}")
             Text(r.message, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+fun ChannelScanScreen(
+    telegramSession: TelegramSession,
+    channelRepository: ChannelProxyRepository,
+    settingsStore: SettingsStore
+) {
+    val scope = rememberCoroutineScope()
+    val authState by telegramSession.authState.collectAsState()
+
+    var channel by remember { mutableStateOf(settingsStore.getChannel()) }
+    var phoneInput by remember { mutableStateOf("") }
+    var codeInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+
+    var isBusy by remember { mutableStateOf(false) }
+    var summary by remember { mutableStateOf<ChannelTestSummary?>(null) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var sendStatus by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) { telegramSession.start() }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Scan a Telegram channel", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "Reads recent messages from a public channel, extracts every " +
+                "proxy link, and real-tests each one — same idea as the " +
+                "Python collector, run from the phone.",
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        OutlinedTextField(
+            value = channel,
+            onValueChange = {
+                channel = it
+                settingsStore.setChannel(it)
+            },
+            label = { Text("Channel username (no @)") },
+            placeholder = { Text(SettingsStore.DEFAULT_CHANNEL) },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Divider()
+
+        when (authState) {
+            TelegramAuthState.Connecting -> {
+                Text("Connecting to Telegram...")
+            }
+            TelegramAuthState.WaitingForPhoneNumber -> {
+                Text("Log in to read channel messages (one-time).", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = phoneInput,
+                    onValueChange = { phoneInput = it },
+                    label = { Text("Phone number, e.g. +989121234567") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { telegramSession.submitPhoneNumber(phoneInput) },
+                    enabled = phoneInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Send code") }
+            }
+            TelegramAuthState.WaitingForCode -> {
+                OutlinedTextField(
+                    value = codeInput,
+                    onValueChange = { codeInput = it },
+                    label = { Text("Login code from Telegram") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { telegramSession.submitCode(codeInput) },
+                    enabled = codeInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Confirm code") }
+            }
+            TelegramAuthState.WaitingForPassword -> {
+                OutlinedTextField(
+                    value = passwordInput,
+                    onValueChange = { passwordInput = it },
+                    label = { Text("Two-step verification password") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { telegramSession.submitPassword(passwordInput) },
+                    enabled = passwordInput.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Confirm password") }
+            }
+            TelegramAuthState.Ready -> {
+                Text("Logged in ✅", color = MaterialTheme.colorScheme.primary)
+                Button(
+                    onClick = {
+                        errorText = null
+                        sendStatus = null
+                        summary = null
+                        isBusy = true
+                        scope.launch {
+                            try {
+                                summary = channelRepository.fetchAndTest(channel)
+                            } catch (e: Exception) {
+                                errorText = e.message ?: "Unknown error"
+                            } finally {
+                                isBusy = false
+                            }
+                        }
+                    },
+                    enabled = channel.isNotBlank() && !isBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isBusy) "Scanning..." else "Fetch & Test")
+                }
+            }
+            is TelegramAuthState.Error -> {
+                Text(
+                    "Telegram session error: ${(authState as TelegramAuthState.Error).reason}",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+
+        errorText?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        summary?.let { s ->
+            Divider()
+            Text("Total: ${s.total}   Working: ${s.workingCount}   Failed: ${s.failedCount}")
+
+            s.results.filter { it.success }.forEach { r ->
+                Text("✅ ${r.proxy.type} ${r.proxy.server}:${r.proxy.port}  (${r.pingMs} ms)")
+            }
+
+            if (s.workingCount > 0) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            val lines = s.results.filter { it.success }.joinToString("\n") { it.proxy.url }
+                            try {
+                                telegramSession.sendToSavedMessages("✅ ${s.workingCount} working proxies:\n\n$lines")
+                                sendStatus = "Sent to Saved Messages."
+                            } catch (e: Exception) {
+                                sendStatus = "Failed to send: ${e.message}"
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Send results to Saved Messages") }
+            }
+        }
+
+        sendStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
 }

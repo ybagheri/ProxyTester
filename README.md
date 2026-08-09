@@ -45,7 +45,37 @@ correctness. To build it you'll need, on your own machine:
   pull the AndroidX/Compose/OkHttp dependencies from Google's/Maven
   Central's repos (already declared in `settings.gradle.kts`)
 
-## Known gaps / things worth deciding next
+## Channel scan (v0.3-ish — reads a Telegram channel like the Python script)
+
+New: a second tab, "Channel Scan", ports over the idea from your Python
+Telethon script (`telegram/TelegramSession.kt`, `repository/ChannelProxyRepository.kt`,
+`ProxyParser.extractFromText`):
+
+- Reads recent messages from a public channel (default `mtpro_xyz`,
+  editable in the UI and remembered across restarts via `SettingsStore`).
+- Extracts every embedded MTProto/SOCKS5 proxy link with the same regex
+  idea as the Python script, de-duplicates, and real-tests each one with
+  the existing checkers.
+- Shows Total/Working/Failed, and can send the working list to your own
+  "Saved Messages" chat (the closest in-app equivalent of the script's
+  `send_results` to a `NOTIFY_USER`).
+
+**This needed a real login**, not just the throwaway connectivity probe
+`MtprotoChecker` uses — reading a channel's history requires an actual
+authorized Telegram user session, exactly like Telethon's
+`TelegramClient(...).start()` in the Python script. `TelegramSession.kt`
+does a normal phone-number → code → (optional) 2FA-password flow via
+TDLib and keeps a persistent session directory, so you only log in once
+per device.
+
+**Expect another debug round on the TDLib API surface**, same pattern as
+`MtprotoChecker`/`AddProxy` earlier: this uses `SearchPublicChat`,
+`GetChatHistory`, `SetAuthenticationPhoneNumber`, `CheckAuthenticationCode`,
+`CheckAuthenticationPassword`, `SendMessage`, all written field-by-field
+against the classic/documented TDLib schema — but this project's CI builds
+TDLib straight from `master`, which (as we saw with `AddProxy`) has
+occasionally renamed/restructured fields. If `compileDebugKotlin` fails
+on any of these, send the log the same way as before and it's a quick fix.
 
 - `Socks5Checker` treats "tunnel stayed open, no immediate reset" as a
   success signal since a full MTProto handshake needs real crypto. It's a
