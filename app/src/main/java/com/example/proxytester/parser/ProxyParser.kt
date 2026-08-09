@@ -79,6 +79,16 @@ object ProxyParser {
         val port = params["port"]?.toIntOrNull() ?: return null
         val secret = params["secret"]
 
+        // An MTProto proxy link without a secret isn't actually usable —
+        // reject it here instead of returning a Proxy with secret=null.
+        // Some channels post the same link twice: once as plain visible
+        // text missing the secret param, and once as the real URL hidden
+        // behind a text_link entity (or an inline button) that DOES have
+        // it. Without this check, de-duplication in ChannelProxyRepository
+        // (keyed on type:server:port) could keep whichever secret-less
+        // copy was encountered first and silently drop the real one.
+        if (secret.isNullOrBlank()) return null
+
         return Proxy(
             type = ProxyType.MTPROTO,
             server = server,
