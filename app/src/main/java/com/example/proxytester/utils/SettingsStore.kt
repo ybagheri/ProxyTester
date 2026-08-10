@@ -3,9 +3,10 @@ package com.example.proxytester.utils
 import android.content.Context
 
 /**
- * Tiny persisted-settings wrapper. Only holds the channel username for now
- * (default matches the Python script this app's channel-scan feature is
- * based on), but is a natural place to add more app settings later.
+ * Tiny persisted-settings wrapper. Holds the channel-scan text field's raw
+ * content (one or more channel usernames, comma/newline separated) —
+ * default matches the Python script this app's channel-scan feature is
+ * based on.
  */
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("proxytester_settings", Context.MODE_PRIVATE)

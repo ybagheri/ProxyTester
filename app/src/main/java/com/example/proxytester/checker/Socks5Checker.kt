@@ -45,17 +45,15 @@ class Socks5Checker : ProxyChecker {
                 socket.use {
                     it.getOutputStream().write(byteArrayOf(0xEF.toByte()))
                     it.getOutputStream().flush()
-
-                    it.soTimeout = 8000
-                    val probe = ByteArray(1)
-                    try {
-                        it.getInputStream().read(probe)
-                    } catch (readTimeout: SocketTimeoutException) {
-                        // No bytes back is fine — a real MTProto reply needs
-                        // a full req_pq round trip we're not doing here. The
-                        // tunnel staying open without an immediate reset is
-                        // the actual signal.
-                    }
+                    // Deliberately not waiting to read a response here: a
+                    // real MTProto reply needs a full req_pq round trip we
+                    // don't implement, so nothing was ever coming back
+                    // anyway — an earlier version blocked here for up to
+                    // 8s waiting on a read that would just time out,
+                    // which was inflating every SOCKS5 proxy's reported
+                    // ping by up to 8000ms for no real signal. The tunnel
+                    // successfully opening (the connect() above) IS the
+                    // signal.
                 }
 
                 return@withContext ProxyResult(

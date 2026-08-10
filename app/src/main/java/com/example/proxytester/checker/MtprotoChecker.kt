@@ -39,7 +39,6 @@ class MtprotoChecker(private val cacheDir: File) : ProxyChecker {
             )
         }
 
-        val start = System.nanoTime()
         val probe = try {
             tdLibManager.testMtprotoProxy(proxy.server, proxy.port, secret)
         } catch (e: Exception) {
@@ -51,12 +50,11 @@ class MtprotoChecker(private val cacheDir: File) : ProxyChecker {
                 reason = FailureReason.UNKNOWN
             )
         }
-        val elapsedMs = (System.nanoTime() - start) / 1_000_000
 
         return ProxyResult(
             proxy = proxy,
             success = probe.success,
-            pingMs = elapsedMs,
+            pingMs = probe.elapsedMs,
             message = probe.message,
             reason = if (probe.success) FailureReason.NONE else FailureReason.TELEGRAM_UNREACHABLE
         )

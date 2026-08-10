@@ -7,7 +7,7 @@ import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
 import java.io.File
 
-data class TdLibProbeResult(val success: Boolean, val message: String)
+data class TdLibProbeResult(val success: Boolean, val message: String, val elapsedMs: Long)
 
 /**
  * Thin wrapper around TDLib's Client for exactly one purpose: prove that a
@@ -16,17 +16,17 @@ data class TdLibProbeResult(val success: Boolean, val message: String)
  * number / auth code flow — it only waits for TDLib to reach
  * ConnectionStateReady (or fail/timeout) after being pointed at the proxy.
  *
- * Event-driven: waits for AuthorizationStateWaitTdlibParameters before
- * sending SetTdlibParameters, and only sends AddProxy once that succeeds —
- * same pattern proven to work in TelegramSession, instead of firing both
- * requests blindly right after client creation. Also propagates errors
- * from those two calls instead of a silent `{ }` handler, so a proxy that
- * TDLib rejects outright shows up as a real failure reason rather than
- * just "timed out".
- *
- * Requires TELEGRAM_API_ID / TELEGRAM_API_HASH to be set in
- * local.properties (see local.properties.example) and the TDLib native
- * library to be added as a dependency — see docs/tdlib-integration.md.
+ * A note on the reported timing: this measures a fresh TDLib session
+ * reaching ConnectionStateReady, which includes a full MTProto key
+ * exchange (Diffie-Hellman handshake) for a brand-new, uncached session —
+ * NOT a lightweight ping over an already-established connection like the
+ * official Telegram app's "check proxy" does (which reuses a warm,
+ * already-keyed session). That's an inherent, expected difference in what
+ * is being measured, not a bug — a first-time handshake is always going
+ * to look slower than a ping on a session that already exists. To keep
+ * the number as fair as reasonably possible, the clock only starts once
+ * AddProxy is actually sent, excluding TDLib's own client/database
+ * bring-up time (which is fixed overhead unrelated to the proxy itself).
  */
 class TdLibManager(private val cacheDir: File) {
 
@@ -42,15 +42,18 @@ class TdLibManager(private val cacheDir: File) {
         }
 
         val readyDeferred = CompletableDeferred<TdLibProbeResult>()
-        // Each probe gets its own throwaway DB dir so parallel probes for
-        // different proxies never collide and nothing persists afterwards.
         val runDir = File(cacheDir, "tdlib-probe-${System.nanoTime()}").apply { mkdirs() }
 
         var proxyRequestSent = false
+        var proxySentAtNanos = System.nanoTime() // fallback if we never get that far
         lateinit var client: Client
 
-        fun complete(result: TdLibProbeResult) {
-            if (!readyDeferred.isCompleted) readyDeferred.complete(result)
+        fun elapsed(): Long = (System.nanoTime() - proxySentAtNanos) / 1_000_000
+
+        fun complete(success: Boolean, message: String) {
+            if (!readyDeferred.isCompleted) {
+                readyDeferred.complete(TdLibProbeResult(success, message, elapsed()))
+            }
         }
 
         val updateHandler = Client.ResultHandler { update ->
@@ -74,11 +77,12 @@ class TdLibManager(private val cacheDir: File) {
                             }
                         ) { paramsResult ->
                             if (paramsResult is TdApi.Error) {
-                                complete(TdLibProbeResult(false, "SetTdlibParameters failed: ${paramsResult.message}"))
+                                complete(false, "SetTdlibParameters failed: ${paramsResult.message}")
                                 return@send
                             }
                             if (proxyRequestSent) return@send
                             proxyRequestSent = true
+                            proxySentAtNanos = System.nanoTime()
                             client.send(
                                 TdApi.AddProxy().apply {
                                     proxy = TdApi.Proxy().apply {
@@ -90,21 +94,18 @@ class TdLibManager(private val cacheDir: File) {
                                 }
                             ) { addProxyResult ->
                                 if (addProxyResult is TdApi.Error) {
-                                    complete(TdLibProbeResult(false, "AddProxy rejected: ${addProxyResult.message}"))
+                                    complete(false, "AddProxy rejected: ${addProxyResult.message}")
                                 }
                             }
                         }
                     }
                 }
                 is TdApi.UpdateConnectionState -> when (update.state) {
-                    is TdApi.ConnectionStateReady -> complete(
-                        TdLibProbeResult(true, "TDLib reached ConnectionStateReady through the proxy")
-                    )
+                    is TdApi.ConnectionStateReady ->
+                        complete(true, "TDLib reached ConnectionStateReady through the proxy")
                     else -> Unit // still connecting/waiting for network — keep waiting for the timeout
                 }
-                is TdApi.Error -> complete(
-                    TdLibProbeResult(false, "TDLib error ${update.code}: ${update.message}")
-                )
+                is TdApi.Error -> complete(false, "TDLib error ${update.code}: ${update.message}")
                 else -> Unit
             }
         }
@@ -112,7 +113,7 @@ class TdLibManager(private val cacheDir: File) {
         client = Client.create(updateHandler, null, null)
 
         val result = withTimeoutOrNull(timeoutMs) { readyDeferred.await() }
-            ?: TdLibProbeResult(false, "Timed out waiting for TDLib to connect through the proxy")
+            ?: TdLibProbeResult(false, "Timed out waiting for TDLib to connect through the proxy", elapsed())
 
         client.send(TdApi.Close()) { }
         runDir.deleteRecursively()

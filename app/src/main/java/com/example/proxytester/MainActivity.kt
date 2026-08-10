@@ -189,7 +189,7 @@ fun ChannelScanScreen(
                 channel = it
                 settingsStore.setChannel(it)
             },
-            label = { Text("Channel username (no @)") },
+            label = { Text("Channel username(s), comma or newline separated") },
             placeholder = { Text(SettingsStore.DEFAULT_CHANNEL) },
             modifier = Modifier.fillMaxWidth()
         )
@@ -287,7 +287,10 @@ fun ChannelScanScreen(
                         scope.launch {
                             try {
                                 val limit = messageLimitInput.toIntOrNull()?.coerceIn(1, 500) ?: 40
-                                summary = channelRepository.fetchAndTest(channel, limit)
+                                val channels = channel.split(",", "\n")
+                                    .map { it.trim() }
+                                    .filter { it.isNotEmpty() }
+                                summary = channelRepository.fetchAndTest(channels, limit)
                             } catch (e: Exception) {
                                 errorText = e.message ?: "Unknown error"
                             } finally {
@@ -327,9 +330,16 @@ fun ChannelScanScreen(
                 style = MaterialTheme.typography.bodySmall
             )
 
+            if (s.channelErrors.isNotEmpty()) {
+                Text("Channel errors", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.error)
+                s.channelErrors.forEach { (ch, err) ->
+                    Text("• $ch: $err", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+
             if (s.workingCount > 0) {
-                Text("Working", style = MaterialTheme.typography.titleSmall)
-                s.results.filter { it.success }.forEach { r ->
+                Text("Working (fastest first)", style = MaterialTheme.typography.titleSmall)
+                s.results.filter { it.success }.sortedBy { it.pingMs }.forEach { r ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -345,7 +355,8 @@ fun ChannelScanScreen(
                 }
                 Button(
                     onClick = {
-                        val lines = s.results.filter { it.success }.joinToString("\n") { it.proxy.url }
+                        val lines = s.results.filter { it.success }.sortedBy { it.pingMs }
+                            .joinToString("\n") { it.proxy.url }
                         clipboard.setText(AnnotatedString(lines))
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -366,7 +377,8 @@ fun ChannelScanScreen(
                 Button(
                     onClick = {
                         scope.launch {
-                            val lines = s.results.filter { it.success }.joinToString("\n") { it.proxy.url }
+                            val lines = s.results.filter { it.success }.sortedBy { it.pingMs }
+                                .joinToString("\n") { it.proxy.url }
                             try {
                                 telegramSession.sendToSavedMessages("✅ ${s.workingCount} working proxies:\n\n$lines")
                                 sendStatus = "Sent to Saved Messages."

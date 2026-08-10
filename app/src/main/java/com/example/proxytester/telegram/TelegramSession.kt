@@ -268,6 +268,18 @@ class TelegramSession(private val filesDir: File) {
     suspend fun sendToSavedMessages(messageText: String) {
         val me = sendAndAwait(TdApi.GetMe()) as TdApi.User
 
+        // A user's numeric id is NOT itself a valid chat id in TDLib —
+        // that was the bug behind "Chat not found". Private chats (like
+        // Saved Messages, which is just a private chat with yourself)
+        // have to be resolved/opened first via CreatePrivateChat, which
+        // returns the actual Chat object (with its own .id) to send to.
+        val chat = sendAndAwait(
+            TdApi.CreatePrivateChat().apply {
+                userId = me.id
+                force = true
+            }
+        ) as TdApi.Chat
+
         val formattedText = TdApi.FormattedText().apply {
             text = messageText
             entities = emptyArray()
@@ -278,7 +290,7 @@ class TelegramSession(private val filesDir: File) {
 
         sendAndAwait(
             TdApi.SendMessage().apply {
-                chatId = me.id
+                chatId = chat.id
                 inputMessageContent = content
             }
         )
